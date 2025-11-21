@@ -16,3 +16,40 @@ export const insertUserSchema = createInsertSchema(users).pick({
 
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
+
+export interface FileNode {
+  id: string;
+  name: string;
+  type: 'file' | 'folder';
+  path: string;
+  content?: string;
+  children?: FileNode[];
+}
+
+export interface AIMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: number;
+}
+
+export interface AIProvider {
+  id: string;
+  name: string;
+  enabled: boolean;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  files: FileNode[];
+}
+
+export interface EditorTab {
+  id: string;
+  path: string;
+  name: string;
+  content: string;
+  modified: boolean;
+  language: string;
+}
