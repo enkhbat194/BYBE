@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import TopBar from '@/components/TopBar';
 import FileTree from '@/components/FileTree';
 import CodeEditor from '@/components/CodeEditor';
@@ -7,43 +7,15 @@ import Terminal from '@/components/Terminal';
 import ResizablePanel from '@/components/ResizablePanel';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useIDEStore } from '@/lib/store';
+import { api, TerminalSocket } from '@/lib/api';
+import { useToast } from '@/hooks/use-toast';
 import type { FileNode, EditorTab, AIMessage } from '@shared/schema';
 
-const mockFiles: FileNode[] = [
-  {
-    id: '1',
-    name: 'src',
-    type: 'folder',
-    path: '/src',
-    children: [
-      {
-        id: '2',
-        name: 'components',
-        type: 'folder',
-        path: '/src/components',
-        children: [
-          { id: '3', name: 'App.tsx', type: 'file', path: '/src/components/App.tsx', content: 'import React from "react";\n\nfunction App() {\n  return (\n    <div className="app">\n      <h1>Hello Bybe!</h1>\n    </div>\n  );\n}\n\nexport default App;' },
-          { id: '4', name: 'Header.tsx', type: 'file', path: '/src/components/Header.tsx', content: 'export default function Header() {\n  return <header>My App</header>;\n}' },
-        ],
-      },
-      { id: '5', name: 'index.ts', type: 'file', path: '/src/index.ts', content: 'import App from "./components/App";\n\nconsole.log("App loaded");' },
-      { id: '6', name: 'utils.ts', type: 'file', path: '/src/utils.ts', content: 'export function add(a: number, b: number) {\n  return a + b;\n}' },
-    ],
-  },
-  {
-    id: '7',
-    name: 'public',
-    type: 'folder',
-    path: '/public',
-    children: [
-      { id: '8', name: 'index.html', type: 'file', path: '/public/index.html', content: '<!DOCTYPE html>\n<html>\n  <head><title>App</title></head>\n  <body><div id="root"></div></body>\n</html>' },
-    ],
-  },
-  { id: '9', name: 'package.json', type: 'file', path: '/package.json', content: '{\n  "name": "my-app",\n  "version": "1.0.0"\n}' },
-  { id: '10', name: 'README.md', type: 'file', path: '/README.md', content: '# My Project\n\nWelcome to my awesome project!' },
-];
+const PROJECT_ID = 'default';
 
 export default function IDEPage() {
+  const { toast } = useToast();
+  const [terminalSocket, setTerminalSocket] = useState<TerminalSocket | null>(null);
   const {
     theme,
     setTheme,
@@ -57,6 +29,7 @@ export default function IDEPage() {
     setFiles,
     messages,
     addMessage,
+    aiProvider,
     terminalOutput,
     addTerminalOutput,
     clearTerminal,
@@ -67,33 +40,89 @@ export default function IDEPage() {
   } = useIDEStore();
 
   useEffect(() => {
-    setFiles(mockFiles);
     setTheme(theme);
+    loadProject();
+    
+    const socket = new TerminalSocket()
+      .connect()
+      .onOutput((output, type) => {
+        if (type === 'clear') {
+          clearTerminal();
+        } else {
+          addTerminalOutput(output);
+        }
+      });
+    
+    setTerminalSocket(socket);
+
+    return () => {
+      socket.disconnect();
+    };
   }, []);
 
-  const handleFileSelect = (file: FileNode) => {
-    if (file.type === 'file') {
-      const newTab: EditorTab = {
-        id: file.id,
-        path: file.path,
-        name: file.name,
-        content: file.content || '',
-        modified: false,
-        language: file.name.endsWith('.tsx') || file.name.endsWith('.ts') 
-          ? 'typescript' 
-          : file.name.endsWith('.json') 
-          ? 'json' 
-          : file.name.endsWith('.html') 
-          ? 'html' 
-          : file.name.endsWith('.md')
-          ? 'markdown'
-          : 'plaintext',
-      };
-      addTab(newTab);
+  const loadProject = async () => {
+    try {
+      const projectFiles = await api.getFiles(PROJECT_ID);
+      setFiles(projectFiles);
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: 'Failed to load project files',
+        variant: 'destructive',
+      });
     }
   };
 
-  const handleSendMessage = (content: string) => {
+  const handleFileSelect = async (file: FileNode) => {
+    if (file.type === 'file') {
+      try {
+        const fileData = await api.getFile(PROJECT_ID, file.path);
+        
+        const newTab: EditorTab = {
+          id: file.id,
+          path: file.path,
+          name: file.name,
+          content: fileData.content || '',
+          modified: false,
+          language: file.name.endsWith('.tsx') || file.name.endsWith('.ts') 
+            ? 'typescript' 
+            : file.name.endsWith('.jsx') || file.name.endsWith('.js')
+            ? 'javascript'
+            : file.name.endsWith('.json') 
+            ? 'json' 
+            : file.name.endsWith('.html') 
+            ? 'html' 
+            : file.name.endsWith('.css')
+            ? 'css'
+            : file.name.endsWith('.md')
+            ? 'markdown'
+            : 'plaintext',
+        };
+        addTab(newTab);
+      } catch (error) {
+        toast({
+          title: 'Error',
+          description: 'Failed to load file',
+          variant: 'destructive',
+        });
+      }
+    }
+  };
+
+  const handleContentChange = async (tabId: string, content: string) => {
+    updateTabContent(tabId, content);
+    
+    const tab = tabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    try {
+      await api.updateFile(PROJECT_ID, tab.path, content);
+    } catch (error) {
+      console.error('Failed to save file:', error);
+    }
+  };
+
+  const handleSendMessage = async (content: string) => {
     const userMessage: AIMessage = {
       id: Date.now().toString(),
       role: 'user',
@@ -102,31 +131,37 @@ export default function IDEPage() {
     };
     addMessage(userMessage);
 
-    setTimeout(() => {
+    try {
+      const response = await api.sendAIMessage(content, aiProvider);
+      
       const aiResponse: AIMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: `I understand you're asking about: "${content}". Let me help you with that! This is a demo response from the AI assistant.`,
+        content: response,
         timestamp: Date.now(),
       };
       addMessage(aiResponse);
-    }, 1000);
+    } catch (error: any) {
+      const errorMessage: AIMessage = {
+        id: (Date.now() + 1).toString(),
+        role: 'system',
+        content: `Error: ${error.message}`,
+        timestamp: Date.now(),
+      };
+      addMessage(errorMessage);
+      
+      toast({
+        title: 'AI Error',
+        description: error.message,
+        variant: 'destructive',
+      });
+    }
   };
 
   const handleCommand = (cmd: string) => {
-    addTerminalOutput(`$ ${cmd}`);
-    
-    setTimeout(() => {
-      if (cmd === 'clear') {
-        clearTerminal();
-      } else if (cmd.startsWith('npm')) {
-        addTerminalOutput('Running npm command...');
-        addTerminalOutput('✓ Command completed successfully');
-      } else {
-        addTerminalOutput(`Executing: ${cmd}`);
-        addTerminalOutput('Done!');
-      }
-    }, 500);
+    if (terminalSocket) {
+      terminalSocket.sendCommand(cmd);
+    }
   };
 
   return (
@@ -156,7 +191,7 @@ export default function IDEPage() {
             activeTabId={activeTabId}
             onTabChange={setActiveTab}
             onTabClose={closeTab}
-            onContentChange={updateTabContent}
+            onContentChange={handleContentChange}
           />
         </div>
 
