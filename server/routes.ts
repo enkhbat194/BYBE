@@ -1,11 +1,15 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { Server as SocketIOServer } from "socket.io";
 import { storage } from "./storage";
 import { exec } from "child_process";
 import { promisify } from "util";
+import providerRoutes from './routes/providers';
+import secretsRoutes from './routes/secrets';
+import { initializeWebSocket } from './services/websocket';
+import { ADAPTERS } from './providers/registry';
 
 const execAsync = promisify(exec);
+
 
 export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/projects/:id", async (req, res) => {
@@ -94,101 +98,104 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+
   app.post("/api/ai/chat", async (req, res) => {
+    let provider: string = 'unknown';
     try {
-      const { message, provider } = req.body;
+      const { message, apiKey, model, advancedSettings } = req.body;
+      provider = req.body.provider;
       
-      const apiKey = provider === 'openai' 
-        ? process.env.OPENAI_API_KEY 
-        : process.env.ANTHROPIC_API_KEY;
+      if (!provider) {
+        return res.status(400).json({
+          error: "Provider not specified."
+        });
+      }
 
       if (!apiKey) {
-        return res.status(400).json({ 
-          error: `${provider.toUpperCase()} API key not configured. Please set it in Settings.` 
+        return res.status(400).json({
+          error: "API key not provided. Please configure your API key in Settings."
         });
       }
 
-      let response = `AI response to: "${message}"\n\nThis is a demo response. To enable real AI, configure your API keys.`;
+      const adapter = ADAPTERS[provider];
+      if (!adapter) {
+        return res.status(400).json({
+          error: `Provider '${provider}' not supported.`
+        });
+      }
+
+      if (!adapter.chat) {
+        return res.status(400).json({
+          error: `Provider '${provider}' does not support chat.`
+        });
+      }
+
+      // Use default model if none specified
+      const modelId = model || (adapter.defaultModel || 'gpt-3.5-turbo');
+
+      // Prepare messages with system prompt if provided
+      const messages = [];
       
-      res.json({ response });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to get AI response" });
+      // Add system prompt if provided in advanced settings
+      if (advancedSettings?.systemPrompt) {
+        messages.push({ role: 'system', content: advancedSettings.systemPrompt });
+      }
+      
+      messages.push({ role: 'user', content: message });
+
+      const chatParams: any = {
+        apiKey,
+        model: modelId,
+        messages
+      };
+
+      // Add advanced settings if provided
+      if (advancedSettings) {
+        if (advancedSettings.temperature !== undefined) {
+          chatParams.temperature = advancedSettings.temperature;
+        }
+        if (advancedSettings.maxTokens !== undefined) {
+          chatParams.maxTokens = advancedSettings.maxTokens;
+        }
+        if (advancedSettings.topP !== undefined) {
+          chatParams.topP = advancedSettings.topP;
+        }
+        if (advancedSettings.frequencyPenalty !== undefined) {
+          chatParams.frequencyPenalty = advancedSettings.frequencyPenalty;
+        }
+        if (advancedSettings.presencePenalty !== undefined) {
+          chatParams.presencePenalty = advancedSettings.presencePenalty;
+        }
+        if (advancedSettings.streamResponse !== undefined) {
+          chatParams.stream = advancedSettings.streamResponse;
+        }
+      }
+
+      const chatResponse = await adapter.chat(chatParams);
+
+      res.json({
+        response: chatResponse.content,
+        model: chatResponse.model || modelId,
+        usage: chatResponse.usage
+      });
+    } catch (error: any) {
+      console.error('AI Chat Error:', error);
+      res.status(500).json({
+        error: error.message || "Failed to get AI response",
+        provider
+      });
     }
   });
 
+  // Mount provider routes
+  app.use('/api/providers', providerRoutes);
+  
+  // Mount secrets routes
+  app.use('/api/secrets', secretsRoutes);
+
+  // Create HTTP server and initialize WebSocket service
   const httpServer = createServer(app);
-  const io = new SocketIOServer(httpServer, {
-    cors: {
-      origin: "*",
-      methods: ["GET", "POST"]
-    }
-  });
-
-  io.on("connection", (socket) => {
-    console.log("Terminal client connected");
-
-    socket.on("command", async (data: { command: string }) => {
-      const { command } = data;
-      
-      try {
-        if (command === 'clear') {
-          socket.emit("output", { output: '', type: 'clear' });
-          return;
-        }
-
-        socket.emit("output", { output: `$ ${command}\n`, type: 'command' });
-
-        const allowedCommands: Record<string, string[]> = {
-          'ls': ['ls', 'ls -la', 'ls -l', 'ls -a'],
-          'pwd': ['pwd'],
-          'echo': [],
-          'date': ['date'],
-          'whoami': ['whoami'],
-          'node': ['node --version', 'node -v'],
-          'npm': ['npm --version', 'npm -v'],
-        };
-
-        const commandParts = command.trim().split(' ');
-        const baseCommand = commandParts[0];
-
-        if (baseCommand === 'echo' && commandParts.length > 1) {
-          const message = commandParts.slice(1).join(' ');
-          socket.emit("output", { output: message + '\n', type: 'stdout' });
-          return;
-        }
-
-        const allowedVariants = allowedCommands[baseCommand];
-        if (allowedVariants && (allowedVariants.length === 0 || allowedVariants.includes(command))) {
-          const { stdout, stderr } = await execAsync(command, { 
-            timeout: 5000,
-            cwd: process.cwd(),
-            shell: '/bin/sh'
-          });
-          
-          if (stdout) {
-            socket.emit("output", { output: stdout, type: 'stdout' });
-          }
-          if (stderr) {
-            socket.emit("output", { output: stderr, type: 'stderr' });
-          }
-        } else {
-          socket.emit("output", { 
-            output: `Command "${command}" is not allowed.\nAllowed: ls, ls -la, pwd, echo <text>, date, whoami, node --version, npm --version\n`, 
-            type: 'error' 
-          });
-        }
-      } catch (error: any) {
-        socket.emit("output", { 
-          output: `Error: ${error.message}\n`, 
-          type: 'error' 
-        });
-      }
-    });
-
-    socket.on("disconnect", () => {
-      console.log("Terminal client disconnected");
-    });
-  });
+  const webSocketService = initializeWebSocket(httpServer);
 
   return httpServer;
 }

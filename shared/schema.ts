@@ -39,6 +39,9 @@ export interface AIProvider {
   enabled: boolean;
 }
 
+// AI Provider type for API calls
+export type AIProviderName = "openrouter" | "openai" | "anthropic" | "groq" | "ollama" | "cursor";
+
 export interface Project {
   id: string;
   name: string;

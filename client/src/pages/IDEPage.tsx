@@ -7,9 +7,11 @@ import Terminal from '@/components/Terminal';
 import ResizablePanel from '@/components/ResizablePanel';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useIDEStore } from '@/lib/store';
-import { api, TerminalSocket } from '@/lib/api';
+import { useAIConfigStore } from '@/lib/aiConfig';
+import { api } from '@/lib/api';
+import TerminalSocket from '@/lib/TerminalSocket';
 import { useToast } from '@/hooks/use-toast';
-import type { FileNode, EditorTab, AIMessage } from '@shared/schema';
+import type { FileNode, EditorTab, AIMessage, AIProviderName } from '@shared/schema';
 
 const PROJECT_ID = 'default';
 
@@ -29,7 +31,6 @@ export default function IDEPage() {
     setFiles,
     messages,
     addMessage,
-    aiProvider,
     terminalOutput,
     addTerminalOutput,
     clearTerminal,
@@ -45,7 +46,7 @@ export default function IDEPage() {
     
     const socket = new TerminalSocket()
       .connect()
-      .onOutput((output, type) => {
+      .onOutput((output: string, type: string) => {
         if (type === 'clear') {
           clearTerminal();
         } else {
@@ -122,6 +123,13 @@ export default function IDEPage() {
     }
   };
 
+  const {
+    selectedProviderId,
+    selectedModelId,
+    apiKeys,
+    advancedSettings,
+  } = useAIConfigStore();
+
   const handleSendMessage = async (content: string) => {
     const userMessage: AIMessage = {
       id: Date.now().toString(),
@@ -132,7 +140,11 @@ export default function IDEPage() {
     addMessage(userMessage);
 
     try {
-      const response = await api.sendAIMessage(content, aiProvider);
+      const provider = selectedProviderId as AIProviderName;
+      const model = selectedModelId || 'gpt-4o-mini'; // fallback model
+      const apiKey = apiKeys[selectedProviderId] || '';
+      
+      const response = await api.sendAIMessage(content, provider, apiKey, model, advancedSettings);
       
       const aiResponse: AIMessage = {
         id: (Date.now() + 1).toString(),
@@ -165,7 +177,7 @@ export default function IDEPage() {
   };
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden">
+    <div className={`h-screen flex flex-col overflow-hidden ${theme === 'dark' ? 'bg-slate-900 text-white' : 'bg-white text-black'}`}>
       <TopBar />
       
       <div className="flex-1 flex overflow-hidden">
@@ -213,7 +225,7 @@ export default function IDEPage() {
                 </TabsTrigger>
               </TabsList>
               <TabsContent value="ai" className="flex-1 mt-0 overflow-hidden">
-                <AIChat messages={messages} onSendMessage={handleSendMessage} />
+                <AIChat />
               </TabsContent>
               <TabsContent value="terminal" className="flex-1 mt-0 overflow-hidden">
                 <Terminal
