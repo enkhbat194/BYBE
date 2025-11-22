@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import TopBar from '@/components/TopBar';
 import FileTree from '@/components/FileTree';
 import CodeEditor from '@/components/CodeEditor';
+import Preview from '@/components/Preview';
 import AIChat from '@/components/AIChat';
 import Terminal from '@/components/Terminal';
 import ResizablePanel from '@/components/ResizablePanel';
@@ -9,15 +10,22 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useIDEStore } from '@/lib/store';
 import { useAIConfigStore } from '@/lib/aiConfig';
 import { api } from '@/lib/api';
-import TerminalSocket from '@/lib/TerminalSocket';
 import { useToast } from '@/hooks/use-toast';
-import type { FileNode, EditorTab, AIMessage, AIProviderName } from '@shared/schema';
+
+// TYPE ТОДОРХОЙЛОЛТ
+interface FileNode {
+  id: string;
+  name: string;
+  path: string;
+  type: 'file' | 'folder';
+  children?: FileNode[];
+  content?: string;
+}
 
 const PROJECT_ID = 'default';
 
 export default function IDEPage() {
   const { toast } = useToast();
-  const [terminalSocket, setTerminalSocket] = useState<TerminalSocket | null>(null);
   const {
     theme,
     setTheme,
@@ -38,68 +46,81 @@ export default function IDEPage() {
     rightPanelWidth,
     setLeftPanelWidth,
     setRightPanelWidth,
+    showTerminal,
+    terminalHeight,
+    setShowTerminal,
+    setTerminalHeight,
+    viewMode,
   } = useIDEStore();
 
   useEffect(() => {
-    setTheme(theme);
-    loadProject();
-    
-    const socket = new TerminalSocket()
-      .connect()
-      .onOutput((output: string, type: string) => {
-        if (type === 'clear') {
-          clearTerminal();
-        } else {
-          addTerminalOutput(output);
-        }
-      });
-    
-    setTerminalSocket(socket);
+    // Анхны файлууд үүсгэх
+    const initialFiles: FileNode[] = [
+      {
+        id: '1',
+        name: 'index.html',
+        path: '/index.html',
+        type: 'file',
+        content: `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Awesome App</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Welcome to My App!</h1>
+        <p>Start coding here...</p>
+        <div id="root"></div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>`
+      },
+      {
+        id: '2', 
+        name: 'style.css',
+        path: '/style.css',
+        type: 'file',
+        content: `/* Main Styles */
+body {
+  margin: 0;
+  padding: 0;
+  font-family: Arial, sans-serif;
+  background: #1e1e1e;
+  color: white;
+}`
+      },
+      {
+        id: '3',
+        name: 'app.js',
+        path: '/app.js', 
+        type: 'file',
+        content: `// Main JavaScript Application
+console.log('Hello World!');`
+      }
+    ];
 
-    return () => {
-      socket.disconnect();
-    };
-  }, []);
-
-  const loadProject = async () => {
-    try {
-      const projectFiles = await api.getFiles(PROJECT_ID);
-      setFiles(projectFiles);
-    } catch (error) {
-      toast({
-        title: 'Error',
-        description: 'Failed to load project files',
-        variant: 'destructive',
-      });
-    }
-  };
+    setFiles(initialFiles);
+    setTheme('dark');
+  }, [setFiles, setTheme]);
 
   const handleFileSelect = async (file: FileNode) => {
     if (file.type === 'file') {
       try {
-        const fileData = await api.getFile(PROJECT_ID, file.path);
-        
-        const newTab: EditorTab = {
+        // Шинэ tab нээх
+        const newTab = {
           id: file.id,
           path: file.path,
           name: file.name,
-          content: fileData.content || '',
+          content: file.content || '',
           modified: false,
-          language: file.name.endsWith('.tsx') || file.name.endsWith('.ts') 
-            ? 'typescript' 
-            : file.name.endsWith('.jsx') || file.name.endsWith('.js')
-            ? 'javascript'
-            : file.name.endsWith('.json') 
-            ? 'json' 
-            : file.name.endsWith('.html') 
-            ? 'html' 
-            : file.name.endsWith('.css')
-            ? 'css'
-            : file.name.endsWith('.md')
-            ? 'markdown'
-            : 'plaintext',
+          language: getLanguageFromFilename(file.name),
         };
         addTab(newTab);
+        setActiveTab(file.id);
       } catch (error) {
         toast({
           title: 'Error',
@@ -110,10 +131,27 @@ export default function IDEPage() {
     }
   };
 
+  const getLanguageFromFilename = (filename: string): string => {
+    const ext = filename.split('.').pop()?.toLowerCase();
+    const languageMap: Record<string, string> = {
+      'js': 'javascript',
+      'jsx': 'javascript',
+      'ts': 'typescript',
+      'tsx': 'typescript',
+      'html': 'html',
+      'css': 'css',
+      'json': 'json',
+      'md': 'markdown',
+      'py': 'python',
+      'txt': 'plaintext'
+    };
+    return languageMap[ext] || 'plaintext';
+  };
+
   const handleContentChange = async (tabId: string, content: string) => {
     updateTabContent(tabId, content);
     
-    const tab = tabs.find(t => t.id === tabId);
+    const tab = tabs.find((t: any) => t.id === tabId);
     if (!tab) return;
 
     try {
@@ -131,7 +169,7 @@ export default function IDEPage() {
   } = useAIConfigStore();
 
   const handleSendMessage = async (content: string) => {
-    const userMessage: AIMessage = {
+    const userMessage = {
       id: Date.now().toString(),
       role: 'user',
       content,
@@ -140,13 +178,13 @@ export default function IDEPage() {
     addMessage(userMessage);
 
     try {
-      const provider = selectedProviderId as AIProviderName;
-      const model = selectedModelId || 'gpt-4o-mini'; // fallback model
+      const provider = selectedProviderId as string;
+      const model = selectedModelId || 'gpt-4o-mini';
       const apiKey = apiKeys[selectedProviderId] || '';
       
       const response = await api.sendAIMessage(content, provider, apiKey, model, advancedSettings);
       
-      const aiResponse: AIMessage = {
+      const aiResponse = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: response,
@@ -154,7 +192,7 @@ export default function IDEPage() {
       };
       addMessage(aiResponse);
     } catch (error: any) {
-      const errorMessage: AIMessage = {
+      const errorMessage = {
         id: (Date.now() + 1).toString(),
         role: 'system',
         content: `Error: ${error.message}`,
@@ -171,73 +209,112 @@ export default function IDEPage() {
   };
 
   const handleCommand = (cmd: string) => {
-    if (terminalSocket) {
-      terminalSocket.sendCommand(cmd);
-    }
+    // Terminal command логик
+    addTerminalOutput(`$ ${cmd}`);
+    addTerminalOutput('Command executed');
   };
 
+  // Preview компонентийн пропсуудыг бэлдэх
+  const getPreviewProps = () => {
+    const htmlFile = files.find(f => f.name === 'index.html');
+    const cssFile = files.find(f => f.name === 'style.css');
+    const jsFile = files.find(f => f.name === 'app.js');
+    
+    return {
+      htmlCode: htmlFile?.content || '<div>No HTML file</div>',
+      cssCode: cssFile?.content || '/* No CSS */',
+      jsCode: jsFile?.content || '// No JS'
+    };
+  };
+
+  const previewProps = getPreviewProps();
+
   return (
-    <div className={`h-screen flex flex-col overflow-hidden ${theme === 'dark' ? 'bg-slate-900 text-white' : 'bg-white text-black'}`}>
+    <div className="replit-ide">
       <TopBar />
       
-      <div className="flex-1 flex overflow-hidden">
+      <div className="main-content">
+        {/* ЗҮҮН ТАЛЫН PANEL - ФАЙЛУУД */}
         <ResizablePanel
-          defaultWidth={leftPanelWidth}
-          minWidth={180}
-          maxWidth={400}
+          defaultSize={leftPanelWidth}
+          minSize={180}
+          maxSize={500}
           side="left"
           onResize={setLeftPanelWidth}
         >
-          <div className="h-full border-r">
+          <div className="left-sidebar h-full">
             <FileTree
               files={files}
               onFileSelect={handleFileSelect}
-              selectedPath={tabs.find(t => t.id === activeTabId)?.path}
+              selectedPath={tabs.find((t: any) => t.id === activeTabId)?.path}
             />
           </div>
         </ResizablePanel>
 
-        <div className="flex-1 min-w-0">
-          <CodeEditor
-            tabs={tabs}
-            activeTabId={activeTabId}
-            onTabChange={setActiveTab}
-            onTabClose={closeTab}
-            onContentChange={handleContentChange}
-          />
+        {/* ТӨВ PANEL - EDITOR/PREVIEW */}
+        <div className="center-panel">
+          {viewMode === 'editor' && (
+            <CodeEditor />
+          )}
+          
+          {viewMode === 'split' && (
+            <div className="split-view">
+              <div className="split-editor">
+                <CodeEditor />
+              </div>
+              <div className="split-preview">
+                <Preview {...previewProps} />
+              </div>
+            </div>
+          )}
+          
+          {viewMode === 'preview' && (
+            <Preview {...previewProps} />
+          )}
         </div>
 
+        {/* БАРУУН ТАЛЫН PANEL - AI CHAT */}
         <ResizablePanel
-          defaultWidth={rightPanelWidth}
-          minWidth={280}
-          maxWidth={500}
+          defaultSize={rightPanelWidth}
+          minSize={280}
+          maxSize={600}
           side="right"
           onResize={setRightPanelWidth}
         >
-          <div className="h-full border-l">
+          <div className="right-sidebar h-full">
             <Tabs defaultValue="ai" className="h-full flex flex-col">
-              <TabsList className="w-full rounded-none border-b h-10 justify-start px-2">
-                <TabsTrigger value="ai" className="text-xs" data-testid="tab-ai">
-                  AI Chat
-                </TabsTrigger>
-                <TabsTrigger value="terminal" className="text-xs" data-testid="tab-terminal">
-                  Terminal
+              <TabsList className="w-full rounded-none border-b">
+                <TabsTrigger value="ai" className="flex-1">
+                  🤖 AI Chat
                 </TabsTrigger>
               </TabsList>
-              <TabsContent value="ai" className="flex-1 mt-0 overflow-hidden">
+              
+              <TabsContent value="ai" className="flex-1 mt-0 p-0">
                 <AIChat />
-              </TabsContent>
-              <TabsContent value="terminal" className="flex-1 mt-0 overflow-hidden">
-                <Terminal
-                  output={terminalOutput}
-                  onCommand={handleCommand}
-                  onClear={clearTerminal}
-                />
               </TabsContent>
             </Tabs>
           </div>
         </ResizablePanel>
       </div>
+
+      {/* TERMINAL PANEL */}
+      {showTerminal && (
+        <ResizablePanel
+          defaultSize={terminalHeight}
+          minSize={120}
+          maxSize={500}
+          side="bottom"
+          onResize={setTerminalHeight}
+        >
+          <div className="bottom-panel w-full">
+            <Terminal
+              output={terminalOutput}
+              onCommand={handleCommand}
+              onClear={clearTerminal}
+            />
+          </div>
+        </ResizablePanel>
+      )}
     </div>
   );
-}
+} 

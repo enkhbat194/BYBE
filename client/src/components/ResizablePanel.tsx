@@ -2,22 +2,22 @@ import { useState, useRef, useEffect, ReactNode } from 'react';
 
 interface ResizablePanelProps {
   children: ReactNode;
-  defaultWidth: number;
-  minWidth: number;
-  maxWidth: number;
-  side: 'left' | 'right';
-  onResize?: (width: number) => void;
+  defaultSize: number;
+  minSize: number;
+  maxSize: number;
+  side: 'left' | 'right' | 'bottom';
+  onResize?: (size: number) => void;
 }
 
 export default function ResizablePanel({
   children,
-  defaultWidth,
-  minWidth,
-  maxWidth,
+  defaultSize,
+  minSize,
+  maxSize,
   side,
   onResize,
 }: ResizablePanelProps) {
-  const [width, setWidth] = useState(defaultWidth);
+  const [size, setSize] = useState(defaultSize);
   const [isResizing, setIsResizing] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -26,24 +26,30 @@ export default function ResizablePanel({
       if (!isResizing || !panelRef.current) return;
 
       const rect = panelRef.current.getBoundingClientRect();
-      let newWidth;
+      let newSize;
 
       if (side === 'left') {
-        newWidth = e.clientX - rect.left;
-      } else {
-        newWidth = rect.right - e.clientX;
+        newSize = e.clientX;
+      } else if (side === 'right') {
+        newSize = window.innerWidth - e.clientX;
+      } else { // bottom
+        newSize = window.innerHeight - e.clientY;
       }
 
-      newWidth = Math.max(minWidth, Math.min(maxWidth, newWidth));
-      setWidth(newWidth);
-      onResize?.(newWidth);
+      newSize = Math.max(minSize, Math.min(maxSize, newSize));
+      setSize(newSize);
+      onResize?.(newSize);
     };
 
     const handleMouseUp = () => {
       setIsResizing(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
     };
 
     if (isResizing) {
+      document.body.style.cursor = side === 'bottom' ? 'row-resize' : 'col-resize';
+      document.body.style.userSelect = 'none';
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
     }
@@ -51,23 +57,36 @@ export default function ResizablePanel({
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
     };
-  }, [isResizing, side, minWidth, maxWidth, onResize]);
+  }, [isResizing, side, minSize, maxSize, onResize]);
+
+  const style = side === 'bottom' 
+    ? { height: `${size}px` } 
+    : { width: `${size}px` };
 
   return (
     <div
       ref={panelRef}
-      className="relative flex-shrink-0"
-      style={{ width: `${width}px` }}
+      className={`relative ${side === 'bottom' ? '' : 'flex-shrink-0'}`}
+      style={style}
     >
       {children}
       <div
-        className={`absolute top-0 ${
-          side === 'left' ? 'right-0' : 'left-0'
-        } bottom-0 w-1 cursor-col-resize hover:bg-primary/50 transition-colors ${
-          isResizing ? 'bg-primary' : ''
+        className={`absolute z-50 ${
+          side === 'left' 
+            ? 'right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-blue-400'
+            : side === 'right'
+            ? 'left-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-blue-400'
+            : 'left-0 right-0 top-0 h-2 cursor-row-resize hover:bg-blue-400'
+        } transition-colors ${
+          isResizing ? 'bg-blue-500' : 'bg-transparent'
         }`}
-        onMouseDown={() => setIsResizing(true)}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          setIsResizing(true);
+        }}
       />
     </div>
   );

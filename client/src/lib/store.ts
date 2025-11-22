@@ -30,6 +30,14 @@ interface IDEStore {
   rightPanelWidth: number;
   setLeftPanelWidth: (width: number) => void;
   setRightPanelWidth: (width: number) => void;
+
+  showTerminal: boolean;
+  setShowTerminal: (show: boolean) => void;
+  terminalHeight: number;
+  setTerminalHeight: (height: number) => void;
+
+  viewMode: 'editor' | 'split' | 'preview';
+  setViewMode: (viewMode: 'editor' | 'split' | 'preview') => void;
 }
 
 export const useIDEStore = create<IDEStore>((set) => ({
@@ -136,4 +144,12 @@ export const useIDEStore = create<IDEStore>((set) => ({
   rightPanelWidth: 320,
   setLeftPanelWidth: (width) => set({ leftPanelWidth: width }),
   setRightPanelWidth: (width) => set({ rightPanelWidth: width }),
+
+  showTerminal: false,
+  setShowTerminal: (show) => set({ showTerminal: show }),
+  terminalHeight: 200,
+  setTerminalHeight: (height) => set({ terminalHeight: height }),
+
+  viewMode: 'editor',
+  setViewMode: (viewMode) => set({ viewMode }),
 }));
