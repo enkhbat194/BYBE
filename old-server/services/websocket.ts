@@ -1,8 +1,9 @@
 import { Server as SocketIOServer, Socket } from "socket.io";
-import { exec } from "child_process";
+import { spawn } from "child_process";
 
 // Store connected clients
 const clients = new Set<Socket>();
+const terminalProcesses = new Map<string, any>();
 
 export class WebSocketService {
   private io: SocketIOServer;
@@ -22,12 +23,77 @@ export class WebSocketService {
     this.io.on("connection", (socket: Socket) => {
       console.log("Client connected:", socket.id);
       clients.add(socket);
-
+  
+      // Terminal shell setup
+      const shell = spawn("cmd.exe", [], {
+        stdio: ["pipe", "pipe", "pipe"],
+        shell: true,
+        windowsHide: true
+      });
+  
+      terminalProcesses.set(socket.id, shell);
+  
+      shell.stdout.on("data", (data: Buffer) => {
+        socket.emit("terminal_output", {
+          output: data.toString(),
+          type: "stdout"
+        });
+      });
+  
+      shell.stderr.on("data", (data: Buffer) => {
+        socket.emit("terminal_output", {
+          output: data.toString(),
+          type: "stderr"
+        });
+      });
+  
+      shell.on("close", (code: number) => {
+        socket.emit("terminal_output", {
+          output: `\r\n[Terminal] Process exited with code ${code}\r\n`,
+          type: "exit"
+        });
+        terminalProcesses.delete(socket.id);
+      });
+  
+      shell.on("error", (err: Error) => {
+        socket.emit("terminal_output", {
+          output: `[Terminal] Spawn error: ${err.message}\r\n`,
+          type: "error"
+        });
+      });
+  
       // Join general room
       socket.join("general");
-
+  
+      socket.on("terminal_input", (data: { input: string }) => {
+        const proc = terminalProcesses.get(socket.id);
+        if (proc?.stdin) {
+          proc.stdin.write(data.input + "\r\n");
+        }
+      });
+  
+      socket.on("terminal_clear", () => {
+        const proc = terminalProcesses.get(socket.id);
+        if (proc?.stdin) {
+          proc.stdin.write("cls\r\n");
+        }
+      });
+  
+      socket.on("terminal_kill", () => {
+        const proc = terminalProcesses.get(socket.id);
+        if (proc) {
+          proc.kill();
+          terminalProcesses.delete(socket.id);
+        }
+      });
+  
       socket.on("disconnect", () => {
         console.log("Client disconnected:", socket.id);
+        const proc = terminalProcesses.get(socket.id);
+        if (proc) {
+          proc.kill();
+          terminalProcesses.delete(socket.id);
+        }
         clients.delete(socket);
       });
 
@@ -54,51 +120,6 @@ export class WebSocketService {
         console.log(`Client ${socket.id} unsubscribed from models updates`);
       });
 
-      // ----------------------------
-      // TERMINAL COMMAND HANDLING
-      // ----------------------------
-      socket.on("terminal_command", (data: { command: string }) => {
-        const { command } = data;
-        console.log("Terminal command:", command);
-
-        if (command === "clear") {
-          socket.emit("terminal_output", {
-            output: "",
-            type: "clear",
-          });
-          return;
-        }
-
-        try {
-          exec(command, (err, stdout, stderr) => {
-            if (stdout) {
-              socket.emit("terminal_output", {
-                output: stdout,
-                type: "text",
-              });
-            }
-
-            if (stderr) {
-              socket.emit("terminal_output", {
-                output: stderr,
-                type: "error",
-              });
-            }
-
-            if (err) {
-              socket.emit("terminal_output", {
-                output: err.message,
-                type: "error",
-              });
-            }
-          });
-        } catch (error: any) {
-          socket.emit("terminal_output", {
-            output: error.message,
-            type: "error",
-          });
-        }
-      });
     });
   }
 

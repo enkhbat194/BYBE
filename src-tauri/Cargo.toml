@@ -1,0 +1,31 @@
+[package]
+name = "bybe-ide"
+version = "0.1.0"
+description = "Bybe IDE - Desktop Code Editor with AI"
+authors = ["Enkhbat"]
+license = "MIT OR Apache-2.0"
+repository = ""
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+tauri = { version = "1.5", features = [
+  "api-all",
+  "shell-open",
+  "tray-icon",
+  "image-png",
+  "protocol-asset"
+] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+reqwest = { version = "0.11", features = ["json"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+tauri-plugin-sqlite = "1.0"
